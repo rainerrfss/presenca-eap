@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>EAP — Presença</title>
+
+<!-- face-api.js — detecção de marcos faciais no browser -->
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --bg:     #080b0f;
+  --surf:   #0f1318;
+  --border: #1c2330;
+  --accent: #00d4ff;
+  --ok:     #00e676;
+  --warn:   #ffab40;
+  --danger: #ff5252;
+  --text:   #cdd6e0;
+  --muted:  #4a5568;
+  --ui:     'Rajdhani', sans-serif;
+  --mono:   'Share Tech Mono', monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--ui);overflow:hidden;-webkit-tap-highlight-color:transparent}
+
+/* ── TELAS ──────────────────────────────────────────── */
+.screen{position:fixed;inset:0;display:flex;flex-direction:column;transition:opacity .3s,transform .3s}
+.screen.hidden{opacity:0;pointer-events:none;transform:translateY(10px)}
+
+/* ── HEADER ─────────────────────────────────────────── */
+header{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;background:var(--surf);border-bottom:1px solid var(--border);flex-shrink:0;z-index:10}
+.logo{display:flex;align-items:center;gap:9px}
+.hex{width:30px;height:30px;background:var(--accent);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);display:grid;place-items:center;font-size:12px;font-weight:700;color:#000}
+header h1{font-size:17px;font-weight:700;letter-spacing:3px;color:var(--accent)}
+#clock{font-family:var(--mono);font-size:13px;color:var(--muted)}
+
+/* ══════════════════════════════════════════════════════
+   TELA CÂMERA
+══════════════════════════════════════════════════════ */
+#cam-screen{background:#000}
+#cam-screen header{background:rgba(8,11,15,.85);border-color:rgba(28,35,48,.5);backdrop-filter:blur(10px)}
+
+.cam-wrap{flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
+#video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+
+/* Sombra radial — abre espaço oval */
+.cam-vignette{
+  position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 58% 70% at 50% 42%,transparent 100%,rgba(0,0,0,.75) 100%);
+  transition:background .4s;
+}
+.cam-vignette.success-flash{background:radial-gradient(ellipse 58% 70% at 50% 42%,rgba(0,230,118,.18) 0%,rgba(0,0,0,.6) 100%)}
+
+/* Frame oval */
+.cam-oval{
+  position:absolute;
+  width:58vw;max-width:240px;
+  aspect-ratio:3/4;
+  top:50%;left:50%;
+  transform:translate(-50%,-54%);
+  border-radius:50%;
+  border:2px solid rgba(0,212,255,.5);
+  box-shadow:0 0 0 1px rgba(0,212,255,.15),inset 0 0 24px rgba(0,212,255,.06);
+  pointer-events:none;
+  transition:border-color .3s,box-shadow .3s;
+}
+.cam-oval.ok{
+  border-color:var(--ok);
+  box-shadow:0 0 0 1px rgba(0,230,118,.25),0 0 28px rgba(0,230,118,.2),inset 0 0 24px rgba(0,230,118,.08);
+}
+.cam-oval.warn{
+  border-color:var(--warn);
+  box-shadow:0 0 0 1px rgba(255,171,64,.25),inset 0 0 24px rgba(255,171,64,.06);
+}
+
+/* Cantos do frame */
+.cam-oval::before,.cam-oval::after{content:'';position:absolute;width:18px;height:18px;border-style:solid;border-color:inherit}
+.cam-oval::before{top:-2px;left:-2px;border-width:2px 0 0 2px}
+.cam-oval::after{bottom:-2px;right:-2px;border-width:0 2px 2px 0}
+
+/* ── FASE: LOADING ──────────────────────────────────── */
+#phase-loading{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;
+  background:rgba(0,0,0,.7);backdrop-filter:blur(4px);
+}
+.load-ring{
+  width:48px;height:48px;border:3px solid rgba(0,212,255,.2);
+  border-top-color:var(--accent);border-radius:50%;
+  animation:spin .9s linear infinite;
+}
+#phase-loading p{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--muted)}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── FASE: SEM ROSTO ────────────────────────────────── */
+#phase-noface{
+  position:absolute;top:14px;left:0;right:0;
+  text-align:center;pointer-events:none;
+  animation:fadePulse 2s ease-in-out infinite;
+}
+@keyframes fadePulse{0%,100%{opacity:.6}50%{opacity:1}}
+#phase-noface span{
+  display:inline-block;padding:6px 14px;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,.1);border-radius:20px;
+  font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#fff;
+}
+
+/* ── FASE: DESAFIO ──────────────────────────────────── */
+#phase-challenge{
+  position:absolute;bottom:0;left:0;right:0;
+  padding:18px 20px 36px;
+  background:linear-gradient(to top,rgba(0,0,0,.9) 0%,transparent 100%);
+  display:flex;flex-direction:column;align-items:center;gap:12px;
+}
+
+/* Anel de contagem regressiva */
+.ring-wrap{position:relative;width:62px;height:62px}
+.ring-wrap svg{position:absolute;inset:0;transform:rotate(-90deg)}
+.ring-track{fill:none;stroke:rgba(255,255,255,.1);stroke-width:3}
+.ring-fill{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;transition:stroke-dashoffset .15s linear,stroke .3s}
+.ring-num{
+  position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:18px;font-weight:700;color:#fff;
+}
+
+/* Instrução do desafio */
+.challenge-box{text-align:center}
+.challenge-label{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+#challenge-text{font-size:22px;font-weight:700;letter-spacing:2px;color:#fff}
+#challenge-icon{font-size:28px;margin-bottom:4px}
+
+/* Barra de progresso */
+.prog-bar{width:100%;max-width:260px;height:3px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .15s linear,background .3s}
+
+/* ── GPS badge ──────────────────────────────────────── */
+.gps-badge{
+  position:absolute;top:14px;right:14px;
+  display:flex;align-items:center;gap:6px;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,.1);border-radius:20px;
+  padding:5px 10px;
+  font-family:var(--mono);font-size:11px;color:#fff;
+}
+.gps-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .4s,box-shadow .4s}
+.gps-dot.ok  {background:var(--ok);  box-shadow:0 0 6px var(--ok)}
+.gps-dot.warn{background:var(--warn);box-shadow:0 0 6px var(--warn)}
+.gps-dot.bad {background:var(--danger)}
+
+/* Erro de câmera */
+#cam-error{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;padding:32px;gap:14px;text-align:center;background:#000}
+#cam-error.show{display:flex}
+#cam-error svg{opacity:.35}
+#cam-error strong{display:block;font-size:16px;letter-spacing:1px;margin-bottom:4px}
+#cam-error p{font-size:13px;color:var(--muted);line-height:1.7}
+
+/* ══════════════════════════════════════════════════════
+   TELA CONFIRMAÇÃO
+══════════════════════════════════════════════════════ */
+#confirm-screen{overflow-y:auto}
+#confirm-screen main{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+
+.card{background:var(--surf);border:1px solid var(--border);border-radius:8px;padding:14px 16px;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+.card-title{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+
+.foto-wrap{display:flex;align-items:flex-start;gap:14px}
+#preview-img{width:80px;height:100px;object-fit:cover;border-radius:6px;border:1px solid var(--border);flex-shrink:0}
+.foto-info p{font-size:13px;color:var(--muted);line-height:1.6}
+.btn-retake{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--ui);font-size:13px;font-weight:600;letter-spacing:1px;cursor:pointer}
+
+.field{display:flex;flex-direction:column;gap:6px}
+label{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--muted)}
+input[type=number]{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:26px;padding:12px 14px;width:100%;letter-spacing:6px;text-align:center;outline:none;transition:border-color .2s;caret-color:var(--accent);-moz-appearance:textfield}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,212,255,.1)}
+
+.checks{display:flex;flex-direction:column;gap:8px}
+.chk{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);transition:color .3s}
+.chk.on{color:var(--ok)}
+.chk-dot{width:7px;height:7px;border-radius:50%;border:1.5px solid currentColor;flex-shrink:0;transition:background .3s}
+.chk.on .chk-dot{background:var(--ok)}
+
+#btn-send{width:100%;padding:16px;background:var(--accent);color:#000;border:none;border-radius:8px;font-family:var(--ui);font-size:17px;font-weight:700;letter-spacing:3px;text-transform:uppercase;cursor:pointer;position:relative;overflow:hidden;transition:opacity .2s,transform .1s}
+#btn-send::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.18) 0%,transparent 55%)}
+#btn-send:disabled{opacity:.22;cursor:not-allowed}
+#btn-send:not(:disabled):active{transform:scale(.97)}
+.spin{display:inline-block;width:18px;height:18px;border:2px solid rgba(0,0,0,.3);border-top-color:#000;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
+
+/* ── TOAST ──────────────────────────────────────────── */
+#toast{position:fixed;bottom:24px;left:16px;right:16px;padding:15px 18px;border-radius:8px;font-size:15px;font-weight:600;letter-spacing:.5px;z-index:999;display:flex;flex-direction:column;gap:3px;transform:translateY(120px);transition:transform .35s cubic-bezier(.34,1.56,.64,1);pointer-events:none}
+#toast.show{transform:translateY(0)}
+#toast.ok  {background:#0b2318;border:1px solid var(--ok);   color:var(--ok)}
+#toast.erro{background:#2b0e0e;border:1px solid var(--danger);color:var(--danger)}
+#toast.aviso{background:#2a1c0b;border:1px solid var(--warn); color:var(--warn)}
+#toast-sub{font-size:12px;opacity:.65;font-family:var(--mono)}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     TELA 1 — CÂMERA + LIVENESS
+══════════════════════════════════════════════════════ -->
+<div class="screen" id="cam-screen">
+  <header>
+    <div class="logo"><div class="hex">▲</div><h1>EAP</h1></div>
+    <span id="clock">--:--:--</span>
+  </header>
+
+  <div class="cam-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas" style="display:none"></canvas>
+
+    <div class="cam-vignette" id="vignette"></div>
+    <div class="cam-oval" id="oval"></div>
+
+    <!-- Fase: carregando modelos -->
+    <div id="phase-loading">
+      <div class="load-ring"></div>
+      <p>Carregando detecção facial…</p>
+    </div>
+
+    <!-- Fase: sem rosto detectado -->
+    <div id="phase-noface" style="display:none">
+      <span>Posicione seu rosto no quadro</span>
+    </div>
+
+    <!-- Fase: desafio ativo -->
+    <div id="phase-challenge" style="display:none">
+      <div class="ring-wrap">
+        <svg viewBox="0 0 62 62" width="62" height="62">
+          <circle class="ring-track" cx="31" cy="31" r="28"/>
+          <circle class="ring-fill" id="ring-fill" cx="31" cy="31" r="28"
+            stroke-dasharray="175.9" stroke-dashoffset="0"/>
+        </svg>
+        <div class="ring-num" id="ring-num">6</div>
+      </div>
+      <div class="challenge-box">
+        <div class="challenge-label">Prove que você está ao vivo</div>
+        <div id="challenge-icon">👁</div>
+        <div id="challenge-text">PISQUE OS OLHOS</div>
+      </div>
+      <div class="prog-bar"><div class="prog-fill" id="prog-fill" style="width:100%"></div></div>
+    </div>
+
+    <!-- GPS badge -->
+    <div class="gps-badge">
+      <div class="gps-dot" id="gps-dot"></div>
+      <span id="gps-label">GPS…</span>
+    </div>
+
+    <!-- Erro de câmera -->
+    <div id="cam-error">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+      </svg>
+      <p><strong>Câmera bloqueada</strong>
+        iPhone: Ajustes › Safari › Câmera › Permitir<br>
+        Android: ícone de cadeado › Câmera › Permitir<br><br>
+        Recarregue a página depois.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     TELA 2 — CONFIRMAÇÃO + ENVIO
+══════════════════════════════════════════════════════ -->
+<div class="screen hidden" id="confirm-screen">
+  <header>
+    <div class="logo"><div class="hex">▲</div><h1>EAP</h1></div>
+    <span id="clock2">--:--:--</span>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="card-title">Selfie verificada ✔</div>
+      <div class="foto-wrap">
+        <img id="preview-img" alt="selfie">
+        <div class="foto-info">
+          <p>Prova de vida confirmada.<br>Se necessário, refaça.</p>
+          <button class="btn-retake" onclick="refazer()">↺ Refazer</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Identificação</div>
+      <div class="field">
+        <label for="saram">N° SARAM</label>
+        <input id="saram" type="number" inputmode="numeric" placeholder="0000000" maxlength="7">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Requisitos</div>
+      <div class="checks">
+        <div class="chk" id="chk-gps"><div class="chk-dot"></div> GPS com precisão ≤ 20m</div>
+        <div class="chk" id="chk-saram"><div class="chk-dot"></div> SARAM preenchido (mín. 6 dígitos)</div>
+        <div class="chk" id="chk-foto"><div class="chk-dot"></div> Prova de vida confirmada</div>
+      </div>
+    </div>
+
+    <button id="btn-send" disabled>REGISTRAR PRESENÇA</button>
+  </main>
+</div>
+
+<div id="toast"><span id="toast-msg"></span><span id="toast-sub"></span></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// ⚙️  COLE A URL DO SEU DEPLOY NO APPS SCRIPT
+// ══════════════════════════════════════════════════════════════════════════════
+var SCRIPT_URL = 'https://script.google.com/macros/s/SEU_ID_AQUI/exec';
+
+// ─── DETECTA file:// E BLOQUEIA COM AVISO CLARO ───────────────────────────────
+if (location.protocol === 'file:') {
+  document.getElementById('phase-loading').innerHTML =
+    '<div style="max-width:300px;text-align:center;padding:0 24px">' +
+    '<div style="font-size:32px;margin-bottom:12px">⚠️</div>' +
+    '<p style="color:#ffab40;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:10px">ABERTO COMO ARQUIVO LOCAL</p>' +
+    '<p style="color:#4a5568;font-size:13px;line-height:1.7">Os modelos de IA não carregam via <code style="color:#cdd6e0">file://</code>.<br><br>' +
+    '<b style="color:#cdd6e0">Para testar agora:</b><br>' +
+    'Abra o terminal na pasta do arquivo e execute:<br><br>' +
+    '<code style="background:#1c2330;padding:6px 10px;border-radius:4px;display:inline-block;font-size:12px">python3 -m http.server 8080</code><br><br>' +
+    'Depois acesse <code style="color:#00d4ff">http://localhost:8080</code><br><br>' +
+    '<b style="color:#cdd6e0">Para produção:</b> suba no GitHub Pages.</p>' +
+    '</div>';
+  // Para tudo aqui — não inicializar câmera nem modelos
+  throw new Error('file:// protocol');
+}
+
+// ─── CONSTANTES DE LIVENESS ───────────────────────────────────────────────────
+var MODEL_URLS = [
+  './weights',                                                   // local (preferido)
+  'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights',   // CDN fallback
+  'https://unpkg.com/face-api.js@0.22.2/weights'               // CDN fallback 2
+];
+var MODEL_URL        = MODEL_URLS[0];
+var CHALLENGE_SECS   = 6;       // segundos para cumprir o desafio
+var EAR_CLOSE        = 0.21;    // EAR abaixo disso = olhos fechados
+var EAR_OPEN         = 0.27;    // EAR acima disso após fechar = piscou
+var TURN_THRESH      = 0.14;    // desvio do nariz > 14% da largura do rosto = virou
+var DETECT_INTERVAL  = 130;     // ms entre cada frame de detecção
+
+// ─── ESTADO ───────────────────────────────────────────────────────────────────
+var gpsPos       = null;
+var fotoB64      = '';
+var videoStream  = null;
+var detectTimer  = null;
+var phase        = 'LOADING';   // LOADING | NOFACE | CHALLENGE | DONE
+var challenge    = '';          // 'BLINK' | 'TURN'
+var blinkPhase   = 'OPEN';      // OPEN → CLOSED → (open again = done)
+var challengeEnd = 0;
+
+// ─── RELÓGIO ──────────────────────────────────────────────────────────────────
+function tick() {
+  var t = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+  document.getElementById('clock').textContent  = t;
+  document.getElementById('clock2').textContent = t;
+}
+tick(); setInterval(tick, 1000);
+
+// ─── GPS ──────────────────────────────────────────────────────────────────────
+navigator.geolocation.watchPosition(
+  function(p) {
+    gpsPos = p;
+    var acc = Math.round(p.coords.accuracy);
+    var dot = document.getElementById('gps-dot');
+    document.getElementById('gps-label').textContent = acc + 'm';
+    dot.className = 'gps-dot ' + (acc <= 20 ? 'ok' : acc <= 50 ? 'warn' : 'bad');
+    verificar();
+  },
+  function() {
+    document.getElementById('gps-label').textContent = 'negado';
+    document.getElementById('gps-dot').className = 'gps-dot bad';
+  },
+  { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+);
+
+// ─── INICIALIZA CÂMERA + MODELOS ──────────────────────────────────────────────
+var video = document.getElementById('video');
+
+function iniciar() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    document.getElementById('cam-error').classList.add('show');
+    setPhase('ERROR');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+  })
+  .then(function(s) {
+    videoStream = s;
+    video.srcObject = s;
+    video.addEventListener('loadeddata', carregarModelos, { once: true });
+  })
+  .catch(function() {
+    document.getElementById('cam-error').classList.add('show');
+  });
+}
+
+async function carregarModelos() {
+  var loadingP = document.getElementById('phase-loading').querySelector('p');
+
+  for (var i = 0; i < MODEL_URLS.length; i++) {
+    try {
+      loadingP.textContent = (i === 0) ? 'Carregando detecção facial…' : 'Tentando CDN alternativo…';
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URLS[i]),
+        faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URLS[i])
+      ]);
+      setPhase('NOFACE');
+      iniciarDeteccao();
+      return; // sucesso, para aqui
+    } catch(e) {
+      if (i < MODEL_URLS.length - 1) {
+        await new Promise(function(r){ setTimeout(r, 600); });
+      }
+    }
+  }
+
+  // Todos falharam
+  document.getElementById('phase-loading').innerHTML =
+    '<div style="max-width:280px;text-align:center;padding:0 20px">' +
+    '<div style="font-size:30px;margin-bottom:10px">📡</div>' +
+    '<p style="color:#ff5252;font-size:14px;font-weight:700;letter-spacing:1px;margin-bottom:8px">SEM CONEXÃO</p>' +
+    '<p style="color:#4a5568;font-size:12px;line-height:1.7">Não foi possível carregar os modelos.<br>Verifique a internet e recarregue.</p>' +
+    '<button onclick="location.reload()" style="margin-top:14px;padding:9px 20px;background:#00d4ff;color:#000;border:none;border-radius:6px;font-size:13px;font-weight:700;letter-spacing:2px;cursor:pointer">RECARREGAR</button>' +
+    '</div>';
+}
+
+iniciar();
+
+// ─── LOOP DE DETECÇÃO FACIAL ──────────────────────────────────────────────────
+function iniciarDeteccao() {
+  clearInterval(detectTimer);
+  detectTimer = setInterval(detectarRosto, DETECT_INTERVAL);
+}
+
+async function detectarRosto() {
+  if (phase === 'DONE' || phase === 'LOADING' || phase === 'ERROR') return;
+  if (!video.readyState || video.readyState < 2) return;
+
+  var opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.45 });
+  var result;
+  try {
+    result = await faceapi
+      .detectSingleFace(video, opts)
+      .withFaceLandmarks(true); // true = usa tiny landmark model
+  } catch(e) { return; }
+
+  if (!result) {
+    if (phase !== 'NOFACE') setPhase('NOFACE');
+    return;
+  }
+
+  // Rosto detectado
+  if (phase === 'NOFACE') {
+    sortearDesafio();
+    return;
+  }
+
+  if (phase !== 'CHALLENGE') return;
+
+  // ── Checar timeout ───────────────────────────────────
+  var remaining = challengeEnd - Date.now();
+  if (remaining <= 0) {
+    // Resetar com novo desafio
+    sortearDesafio();
+    return;
+  }
+
+  // ── Atualizar anel de countdown ──────────────────────
+  var frac = remaining / (CHALLENGE_SECS * 1000);
+  var circ  = 175.9; // 2 * pi * 28
+  document.getElementById('ring-fill').setAttribute('stroke-dashoffset', circ * (1 - frac));
+  document.getElementById('ring-num').textContent = Math.ceil(remaining / 1000);
+  document.getElementById('prog-fill').style.width = (frac * 100) + '%';
+
+  // ── Avaliar landmarks ────────────────────────────────
+  var lm  = result.landmarks;
+  var box = result.detection.box;
+
+  if (challenge === 'BLINK') {
+    var earVal = (ear(lm.getLeftEye()) + ear(lm.getRightEye())) / 2;
+
+    if      (blinkPhase === 'OPEN'   && earVal < EAR_CLOSE) { blinkPhase = 'CLOSED'; }
+    else if (blinkPhase === 'CLOSED' && earVal > EAR_OPEN)  { sucessoDesafio(); }
+
+  } else { // TURN
+    var nose     = lm.getNose();
+    var noseTip  = nose[3];                              // ponta do nariz
+    var centerX  = box.x + box.width / 2;
+    var desvio   = Math.abs(noseTip.x - centerX) / box.width;
+
+    if (desvio > TURN_THRESH) { sucessoDesafio(); }
+  }
+}
+
+// ── Eye Aspect Ratio ─────────────────────────────────────────────────────────
+// EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
+function ear(eye) {
+  function d(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+  return (d(eye[1], eye[5]) + d(eye[2], eye[4])) / (2 * d(eye[0], eye[3]));
+}
+
+// ─── ESTADOS DO DESAFIO ───────────────────────────────────────────────────────
+function setPhase(p) {
+  phase = p;
+  document.getElementById('phase-loading').style.display   = (p === 'LOADING') ? 'flex'  : 'none';
+  document.getElementById('phase-noface').style.display    = (p === 'NOFACE')  ? 'block' : 'none';
+  document.getElementById('phase-challenge').style.display = (p === 'CHALLENGE') ? 'flex' : 'none';
+  document.getElementById('oval').className = 'cam-oval' + (p === 'CHALLENGE' ? ' warn' : '');
+}
+
+function sortearDesafio() {
+  challenge    = Math.random() < 0.5 ? 'BLINK' : 'TURN';
+  blinkPhase   = 'OPEN';
+  challengeEnd = Date.now() + CHALLENGE_SECS * 1000;
+
+  if (challenge === 'BLINK') {
+    document.getElementById('challenge-icon').textContent = '👁';
+    document.getElementById('challenge-text').textContent = 'PISQUE OS OLHOS';
+  } else {
+    document.getElementById('challenge-icon').textContent = '↔';
+    document.getElementById('challenge-text').textContent = 'VIRE A CABEÇA';
+  }
+
+  document.getElementById('ring-num').textContent = CHALLENGE_SECS;
+  document.getElementById('ring-fill').setAttribute('stroke-dashoffset', '0');
+  document.getElementById('prog-fill').style.width = '100%';
+  document.getElementById('prog-fill').style.background = 'var(--accent)';
+
+  setPhase('CHALLENGE');
+}
+
+function sucessoDesafio() {
+  phase = 'DONE';
+  clearInterval(detectTimer);
+
+  // Flash verde
+  document.getElementById('vignette').classList.add('success-flash');
+  document.getElementById('oval').classList.remove('warn');
+  document.getElementById('oval').classList.add('ok');
+
+  // Captura o frame atual
+  setTimeout(function() {
+    capturarFoto();
+  }, 300); // pequeno delay para o flash ser visível
+}
+
+// ─── CAPTURA ──────────────────────────────────────────────────────────────────
+function capturarFoto() {
+  var cnv = document.getElementById('canvas');
+  cnv.width  = video.videoWidth  || 640;
+  cnv.height = video.videoHeight || 480;
+  cnv.getContext('2d').drawImage(video, 0, 0, cnv.width, cnv.height);
+  fotoB64 = cnv.toDataURL('image/jpeg', 0.82);
+
+  // Para câmera
+  if (videoStream) videoStream.getTracks().forEach(function(t) { t.stop(); });
+
+  // Passa para a tela de confirmação
+  document.getElementById('preview-img').src = fotoB64;
+  document.getElementById('cam-screen').classList.add('hidden');
+  document.getElementById('confirm-screen').classList.remove('hidden');
+  verificar();
+}
+
+// ─── REFAZER ──────────────────────────────────────────────────────────────────
+function refazer() {
+  fotoB64 = '';
+  phase = 'LOADING';
+  blinkPhase = 'OPEN';
+
+  document.getElementById('confirm-screen').classList.add('hidden');
+  document.getElementById('cam-screen').classList.remove('hidden');
+  document.getElementById('vignette').classList.remove('success-flash');
+  document.getElementById('oval').className = 'cam-oval';
+  setPhase('LOADING');
+
+  iniciar();
+  verificar();
+}
+
+// ─── VERIFICAR REQUISITOS ─────────────────────────────────────────────────────
+document.getElementById('saram').addEventListener('input', verificar);
+
+function verificar() {
+  var okGps   = !!(gpsPos && gpsPos.coords.accuracy <= 20);
+  var okSaram = document.getElementById('saram').value.trim().length >= 6;
+  var okFoto  = fotoB64 !== '';
+  chk('chk-gps',   okGps);
+  chk('chk-saram', okSaram);
+  chk('chk-foto',  okFoto);
+  document.getElementById('btn-send').disabled = !(okGps && okSaram && okFoto);
+}
+
+function chk(id, ok) {
+  var el = document.getElementById(id);
+  ok ? el.classList.add('on') : el.classList.remove('on');
+}
+
+// ─── ENVIO ────────────────────────────────────────────────────────────────────
+document.getElementById('btn-send').addEventListener('click', function() {
+  var btn = this;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>';
+
+  fetch(SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      saram: document.getElementById('saram').value.trim(),
+      lat:   gpsPos.coords.latitude,
+      lng:   gpsPos.coords.longitude,
+      acc:   gpsPos.coords.accuracy,
+      foto:  fotoB64
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(r) {
+    btn.innerHTML = 'REGISTRAR PRESENÇA';
+    if (r.status === 'OK') {
+      toast('✔ PRESENÇA REGISTRADA', r.hora + ' · ' + r.turno + ' · ' + r.dist + 'm', 'ok');
+      setTimeout(function() {
+        document.getElementById('saram').value = '';
+        refazer();
+      }, 3000);
+    } else if (r.status === 'DUPLICADO') {
+      toast('Já registrado', r.motivo, 'aviso'); btn.disabled = false;
+    } else if (r.status === 'FORA') {
+      toast('Fora do horário', r.motivo, 'aviso'); btn.disabled = false;
+    } else {
+      toast(r.status || 'ERRO', r.motivo || 'Tente novamente', 'erro'); btn.disabled = false;
+    }
+  })
+  .catch(function(e) {
+    btn.innerHTML = 'REGISTRAR PRESENÇA';
+    btn.disabled = false;
+    toast('ERRO DE REDE', e.message, 'erro');
+  });
+});
+
+// ─── TOAST ────────────────────────────────────────────────────────────────────
+var toastTimer;
+function toast(msg, sub, tipo) {
+  var el = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  document.getElementById('toast-sub').textContent = sub || '';
+  el.className = 'show ' + (tipo || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { el.classList.remove('show'); }, 4500);
+}
+</script>
+</body>
+</html>
