@@ -344,10 +344,10 @@ var MODEL_URLS = [
 ];
 var MODEL_URL        = MODEL_URLS[0];
 var CHALLENGE_SECS   = 6;       // segundos para cumprir o desafio
-var EAR_CLOSE        = 0.21;    // EAR abaixo disso = olhos fechados
-var EAR_OPEN         = 0.27;    // EAR acima disso após fechar = piscou
-var TURN_THRESH      = 0.14;    // desvio do nariz > 14% da largura do rosto = virou
-var DETECT_INTERVAL  = 130;     // ms entre cada frame de detecção
+var EAR_CLOSE        = 0.25;    // EAR abaixo disso = olhos fechados
+var EAR_OPEN         = 0.29;    // EAR acima disso após fechar = piscou
+var TURN_THRESH      = 0.11;    // desvio do nariz > 14% da largura do rosto = virou
+var DETECT_INTERVAL  = 90;     // ms entre cada frame de detecção
 
 // ─── ESTADO ───────────────────────────────────────────────────────────────────
 var gpsPos       = null;
@@ -617,6 +617,7 @@ document.getElementById('btn-send').addEventListener('click', function() {
   fetch(SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    redirect: 'follow',
     body: JSON.stringify({
       saram: document.getElementById('saram').value.trim(),
       lat:   gpsPos.coords.latitude,
