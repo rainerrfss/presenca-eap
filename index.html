@@ -622,49 +622,55 @@ document.getElementById('btn-send').addEventListener('click', function() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>';
 
-  var controller = new AbortController();
-  var fetchTimeout = setTimeout(function(){ controller.abort(); }, 20000);
+  var payload = JSON.stringify({
+    saram: document.getElementById('saram').value.trim(),
+    lat:   gpsPos.coords.latitude,
+    lng:   gpsPos.coords.longitude,
+    acc:   gpsPos.coords.accuracy,
+    foto:  fotoB64
+  });
 
-  fetch(SCRIPT_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    redirect: 'follow',
-    signal: controller.signal,
-    body: JSON.stringify({
-      saram: document.getElementById('saram').value.trim(),
-      lat:   gpsPos.coords.latitude,
-      lng:   gpsPos.coords.longitude,
-      acc:   gpsPos.coords.accuracy,
-      foto:  fotoB64
-    })
-  })
-  .then(function(r) {
-    clearTimeout(fetchTimeout);
-    return r.json();
-  })
-  .then(function(r) {
+  // XMLHttpRequest é mais confiável que fetch no iOS Safari com Apps Script
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', SCRIPT_URL, true);
+  xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+  xhr.timeout = 25000;
+
+  xhr.onload = function() {
     btn.innerHTML = 'REGISTRAR PRESENÇA';
-    if (r.status === 'OK') {
-      toast('✔ PRESENÇA REGISTRADA', r.hora + ' · ' + r.turno + ' · ' + r.dist + 'm', 'ok');
-      setTimeout(function() {
-        document.getElementById('saram').value = '';
-        refazer();
-      }, 3000);
-    } else if (r.status === 'DUPLICADO') {
-      toast('Já registrado', r.motivo, 'aviso'); btn.disabled = false;
-    } else if (r.status === 'FORA') {
-      toast('Fora do horário', r.motivo, 'aviso'); btn.disabled = false;
-    } else {
-      toast(r.status || 'ERRO', r.motivo || 'Tente novamente', 'erro'); btn.disabled = false;
+    try {
+      var r = JSON.parse(xhr.responseText);
+      if (r.status === 'OK') {
+        toast('✔ PRESENÇA REGISTRADA', r.hora + ' · ' + r.turno + ' · ' + r.dist + 'm', 'ok');
+        setTimeout(function() {
+          document.getElementById('saram').value = '';
+          refazer();
+        }, 3000);
+      } else if (r.status === 'DUPLICADO') {
+        toast('Já registrado', r.motivo, 'aviso'); btn.disabled = false;
+      } else if (r.status === 'FORA') {
+        toast('Fora do horário', r.motivo, 'aviso'); btn.disabled = false;
+      } else {
+        toast(r.status || 'ERRO', r.motivo || 'Tente novamente', 'erro'); btn.disabled = false;
+      }
+    } catch(e) {
+      toast('ERRO', 'Resposta inválida do servidor', 'erro'); btn.disabled = false;
     }
-  })
-  .catch(function(e) {
-    clearTimeout(fetchTimeout);
+  };
+
+  xhr.onerror = function() {
     btn.innerHTML = 'REGISTRAR PRESENÇA';
     btn.disabled = false;
-    var msg = e.name === 'AbortError' ? 'Timeout — verifique sua conexão' : e.message;
-    toast('ERRO DE REDE', msg, 'erro');
-  });
+    toast('ERRO DE REDE', 'Verifique sua conexão e tente novamente', 'erro');
+  };
+
+  xhr.ontimeout = function() {
+    btn.innerHTML = 'REGISTRAR PRESENÇA';
+    btn.disabled = false;
+    toast('TIMEOUT', 'Servidor demorou demais — tente novamente', 'aviso');
+  };
+
+  xhr.send(payload);
 });
 
 // ─── TOAST ────────────────────────────────────────────────────────────────────
