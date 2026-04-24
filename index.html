@@ -317,7 +317,7 @@ input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,212,255,.1)}
 // ══════════════════════════════════════════════════════════════════════════════
 // ⚙️  COLE A URL DO SEU DEPLOY NO APPS SCRIPT
 // ══════════════════════════════════════════════════════════════════════════════
-var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxyi6P25b15NlD2QN3e767LyCsIcXNnu4TbNwCG0MPMV7zMjgG0nOzqx-a661zX1i5-/exec';
+var SCRIPT_URL = 'https://eap-proxy.rfelipe502.workers.dev/';
 
 // ─── DETECTA file:// E BLOQUEIA COM AVISO CLARO ───────────────────────────────
 if (location.protocol === 'file:') {
@@ -622,40 +622,22 @@ document.getElementById('btn-send').addEventListener('click', function() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>';
 
-  // JSONP — único método 100% confiável no iOS Safari com Apps Script
-  // Não sofre bloqueio CORS nem redirect issue
-  var cbName = 'eapCb_' + Date.now();
-  var script = document.createElement('script');
-  var done = false;
-
-  var params = new URLSearchParams({
-    callback: cbName,
-    saram:    document.getElementById('saram').value.trim(),
-    lat:      gpsPos.coords.latitude,
-    lng:      gpsPos.coords.longitude,
-    acc:      Math.round(gpsPos.coords.accuracy),
-    foto:     fotoB64
+  // Cloudflare Worker como proxy — resolve CORS no iOS Safari
+  var payload = JSON.stringify({
+    saram: document.getElementById('saram').value.trim(),
+    lat:   gpsPos.coords.latitude,
+    lng:   gpsPos.coords.longitude,
+    acc:   Math.round(gpsPos.coords.accuracy),
+    foto:  fotoB64
   });
 
-  var timer = setTimeout(function() {
-    if (done) return;
-    done = true;
-    cleanup();
-    btn.innerHTML = 'REGISTRAR PRESENÇA';
-    btn.disabled = false;
-    toast('TIMEOUT', 'Sem resposta — verifique conexão e tente novamente', 'aviso');
-  }, 25000);
-
-  function cleanup() {
-    clearTimeout(timer);
-    delete window[cbName];
-    if (script.parentNode) script.parentNode.removeChild(script);
-  }
-
-  window[cbName] = function(r) {
-    if (done) return;
-    done = true;
-    cleanup();
+  fetch(SCRIPT_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    payload
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(r) {
     btn.innerHTML = 'REGISTRAR PRESENÇA';
     if (r.status === 'OK') {
       toast('✔ PRESENÇA REGISTRADA', r.hora + ' · ' + r.turno + ' · ' + r.dist + 'm do ponto', 'ok');
@@ -670,19 +652,12 @@ document.getElementById('btn-send').addEventListener('click', function() {
     } else {
       toast(r.status || 'ERRO', r.motivo || 'Tente novamente', 'erro'); btn.disabled = false;
     }
-  };
-
-  script.onerror = function() {
-    if (done) return;
-    done = true;
-    cleanup();
+  })
+  .catch(function(e) {
     btn.innerHTML = 'REGISTRAR PRESENÇA';
     btn.disabled = false;
-    toast('ERRO DE REDE', 'Verifique sua conexão e tente novamente', 'erro');
-  };
-
-  script.src = SCRIPT_URL + '?' + params.toString();
-  document.head.appendChild(script);
+    toast('ERRO DE REDE', e.message, 'erro');
+  });
 });
 
 // ─── TOAST ────────────────────────────────────────────────────────────────────
